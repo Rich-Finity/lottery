@@ -13,45 +13,42 @@
     <!-- Google Font Prompt -->
     <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
-    <!-- Firebase SDK Modules & Initialization -->
+    <!-- Netlify Identity (Google / Gmail Login) -->
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, arrayUnion, arrayRemove } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { oauthLogin, handleAuthCallback, getUser, logout, getSettings } from "https://esm.sh/@netlify/identity@2.0.1";
 
-        // Global Firebase Configuration Setup
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'lottery-dealer-app';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-            apiKey: "AIzaSyDemoConfigForLotteryAppKey123456",
-            authDomain: "lottery-app-demo.firebaseapp.com",
-            projectId: "lottery-app-demo",
-            storageBucket: "lottery-app-demo.appspot.com",
-            messagingSenderId: "1234567890",
-            appId: "1:1234567890:web:demo123456"
+        // Map a Netlify Identity user to the shape the app expects
+        function toAppUser(u) {
+            const email = (u.email || '').toLowerCase();
+            return {
+                uid: u.id,
+                email,
+                photoURL: u.pictureUrl || ('https://placehold.co/100x100/4f46e5/ffffff?text=' + (email.charAt(0) || 'U').toUpperCase()),
+                name: u.name || ''
+            };
+        }
+
+        window.identityAuth = {
+            loginWithGoogle: () => oauthLogin('google'),
+            logout: () => logout(),
+            getSettings: () => getSettings()
         };
 
-        try {
-            const app = initializeApp(firebaseConfig);
-            const auth = getAuth(app);
-            const db = getFirestore(app);
-            const provider = new GoogleAuthProvider();
-
-            window.firebaseAuth = auth;
-            window.firebaseDb = db;
-            window.googleProvider = provider;
-            window.signInWithPopup = signInWithPopup;
-            window.signOut = signOut;
-            window.doc = doc;
-            window.getDoc = getDoc;
-            window.setDoc = setDoc;
-            window.updateDoc = updateDoc;
-            window.onSnapshot = onSnapshot;
-            window.arrayUnion = arrayUnion;
-            window.arrayRemove = arrayRemove;
-            window.appId = appId;
-        } catch (e) {
-            console.warn("Firebase Init Notice: Running in standalone local storage mode.", e);
-        }
+        (async () => {
+            try {
+                // Completes the Google OAuth redirect (token in URL hash)
+                const result = await handleAuthCallback();
+                const user = (result && result.user) || await getUser();
+                if (user && typeof window.applyLoggedInUser === 'function') {
+                    await window.applyLoggedInUser(toAppUser(user));
+                }
+            } catch (e) {
+                console.error('Identity callback error:', e);
+                if (typeof window.showLoginError === 'function') {
+                    window.showLoginError('ไม่สามารถเข้าสู่ระบบด้วย Gmail ได้: ' + (e && e.message ? e.message : e));
+                }
+            }
+        })();
     </script>
 
     <style>
@@ -110,16 +107,6 @@
                     <span>เข้าสู่ระบบด้วย Gmail</span>
                 </button>
 
-                <!-- Quick Manual Email Login for Preview environments -->
-                <div class="pt-2 border-t border-slate-100 text-left">
-                    <label class="block text-[11px] font-bold text-slate-500 mb-1">หรือระบุ Gmail เพื่อทดลองเข้าใช้งานทันที:</label>
-                    <div class="flex gap-2">
-                        <input type="email" id="quickEmailInput" placeholder="yourname@gmail.com" class="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none">
-                        <button onclick="handleQuickEmailLogin()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-2 rounded-xl text-xs shadow transition">
-                            เข้าใช้งาน
-                        </button>
-                    </div>
-                </div>
             </div>
 
             <!-- TAB 2: Admin Direct Login -->
@@ -532,47 +519,36 @@
         // Ensure Master Email is pre-approved
         userApprovals[MASTER_ADMIN_EMAIL] = { status: 'APPROVED', date: new Date().toISOString() };
 
-        // Handle Standard / Fallback Google Login
+        function showLoginError(message) {
+            const alertBox = document.getElementById('loginAlert');
+            if (!alertBox) return;
+            alertBox.className = "text-xs p-3 rounded-xl border text-left space-y-1 bg-red-50 border-red-200 text-red-900";
+            alertBox.innerHTML = `<i class="fa-solid fa-circle-xmark text-red-600 mr-1"></i> `;
+            alertBox.appendChild(document.createTextNode(message));
+            alertBox.classList.remove('hidden');
+        }
+        window.showLoginError = showLoginError;
+
+        // Google (Gmail) login via Netlify Identity — redirects to Google and back
         async function handleGoogleLogin() {
             const alertBox = document.getElementById('loginAlert');
             if (alertBox) alertBox.classList.add('hidden');
 
-            try {
-                if (window.firebaseAuth && window.googleProvider && window.signInWithPopup) {
-                    const result = await window.signInWithPopup(window.firebaseAuth, window.googleProvider);
-                    await applyLoggedInUser(result.user);
-                } else {
-                    throw new Error("Firebase Auth Popup unavailable");
-                }
-            } catch (err) {
-                console.warn("Google Popup Auth bypassed or environment restricted:", err);
-                const emailPrompt = prompt("ระบบ Google Login ไม่พร้อมใช้งานในสภาพแวดล้อมนี้ กรุณาระบุอีเมล Gmail ของท่านเพื่อเข้าใช้งาน:", MASTER_ADMIN_EMAIL);
-                if (emailPrompt && emailPrompt.trim()) {
-                    handleCustomEmailLogin(emailPrompt.trim());
-                }
-            }
-        }
-
-        function handleQuickEmailLogin() {
-            const emailInput = document.getElementById('quickEmailInput');
-            if (!emailInput) return;
-            const email = emailInput.value.trim();
-            if (!email) {
-                alert("กรุณาระบุอีเมล Gmail");
+            if (!window.identityAuth) {
+                showLoginError('ระบบเข้าสู่ระบบยังโหลดไม่เสร็จ กรุณาลองใหม่อีกครั้ง');
                 return;
             }
-            handleCustomEmailLogin(email);
-        }
-
-        function handleCustomEmailLogin(email) {
-            const cleanEmail = email.toLowerCase();
-            const demoUser = {
-                uid: 'user_' + btoa(cleanEmail).replace(/=/g, ''),
-                email: cleanEmail,
-                photoURL: 'https://placehold.co/100x100/4f46e5/ffffff?text=' + cleanEmail.charAt(0).toUpperCase(),
-                isAdmin: cleanEmail === MASTER_ADMIN_EMAIL
-            };
-            applyLoggedInUser(demoUser);
+            try {
+                const settings = await window.identityAuth.getSettings();
+                if (!settings.providers || !settings.providers.google) {
+                    showLoginError('ยังไม่ได้เปิดใช้งานการเข้าสู่ระบบด้วย Google กรุณาแจ้งผู้ดูแลระบบ');
+                    return;
+                }
+                window.identityAuth.loginWithGoogle();
+            } catch (err) {
+                console.error('Google login error:', err);
+                showLoginError('ไม่สามารถเชื่อมต่อระบบเข้าสู่ระบบได้ กรุณาลองใหม่อีกครั้ง');
+            }
         }
 
         async function registerAndValidateDevice(uid) {
@@ -602,8 +578,8 @@
         }
 
         function handleLogout() {
-            if (window.firebaseAuth && window.signOut) {
-                window.signOut(window.firebaseAuth).catch(() => {});
+            if (window.identityAuth) {
+                window.identityAuth.logout().catch(() => {});
             }
             currentUser = null;
             isSuperAdminSession = false;
@@ -706,6 +682,8 @@
             
             subscribeToCloudData(user.uid);
         }
+
+        window.applyLoggedInUser = applyLoggedInUser;
 
         function handleAdminLogin(event) {
             event.preventDefault();
